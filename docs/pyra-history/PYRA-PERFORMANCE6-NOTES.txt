@@ -1,0 +1,45 @@
+Descent 3 - DragonBox Pyra / native PowerVR GLES2 - Performance 6
+===============================================================
+Based on working Performance 5 / textureidfix4 (preserves all earlier
+native EGL, 32-bit texture IDs, GLES2 textures and presentation fixes).
+
+Changes:
+- Consecutive GL_TRIANGLE_FAN polygons are converted into normal triangles
+  and gathered in a 4096-vertex CPU staging buffer.
+- Each batch is uploaded once with glBufferSubData and rendered in one
+  glDrawArrays(GL_TRIANGLES) call; no GLES3 VAO, instancing or GL4ES.
+- Automatic guarded flush BEFORE every other GL API call. This conservative
+  ordering protects texture switches, uniforms, transforms, depth, blending,
+  clears, readbacks, line/point primitives and framebuffer presentation.
+  Redundant state changes can cause extra flushes, so measure the actual gain.
+- PYRA_BATCH=0 disables batching and keeps the previous one-polygon/one-draw
+  implementation as a regression-safe comparison.
+- With PYRA_PERF=1, two lines per ~5s: existing FPS/swap/presentation metrics
+  and new draws/frame, vertex uploads/frame, queued triangles, vertex KB,
+  CPU wall time in buffer upload, GL draw submission and CPU enqueue.
+
+Build:
+  ./build-pyra.sh 2>&1 | tee build-pyra.log
+
+Run Performance 6 / batch enabled (default):
+  env -u PYRA_GL_CALL_TRACE -u PYRA_GL_TRACE PYRA_PERF=1 \
+    ./run-pyra.sh 2>&1 | tee perf6-batch.log
+
+A/B tests (use SAME level, view, settings, FPS cap and resolution):
+  ./benchmark-pyra.sh baseline
+  ./benchmark-pyra.sh batch
+
+Repeat at 640x480 and 1280x720, changing resolution in-game; there is no
+new command-line option to change the resolution. Collect 20-30 seconds
+of STABLE in-level readings, excluding the level-load interval.
+
+Example metrics (NOT actual Pyra results):
+  PYRA PERF: fps=... polys/frame=... uploads/frame=... presentCPU=... 
+  PYRA PERF6: batch=1 draws/frame=... vboUploads/frame=... uploadCPU=...
+
+NOTES:
+- uploadCPU / drawCPU are *CPU wall times for GLES calls*, not GPU timings.
+- Offscreen GPU fill/composition cost is not isolated by presentCPU alone.
+- If visual rendering differs, rerun with PYRA_BATCH=0 and capture both logs.
+- PYRA_GL_CALL_TRACE=1 is for error hunting and MUST NOT be used for FPS tests.
+- A real ARMv7 Pyra build/PowerVR runtime check is required.

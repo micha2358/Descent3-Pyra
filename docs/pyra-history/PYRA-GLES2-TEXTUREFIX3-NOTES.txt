@@ -1,0 +1,35 @@
+Descent 3 / DragonBox Pyra - GLES2 TextureFix 3 (2026-10-17)
+
+Based on presentfix2, keeping its PowerVR native EGL/GLES2 loader, bundled SDL3,
+cpp-httplib, plog, ALSA, and offscreen EGL swap presentation unchanged.
+
+Root-cause candidate from run-pyra(1).log:
+- At frames 240 and 360 glGetError before present reports GL_INVALID_OPERATION
+  (0x0502). At the same times FBO=70001 and completeness=0x8CD5.
+  GL error is upstream of the swap: further swap/FBO ordering changes are
+  not justified by that trace.
+
+Changes:
+1. OpenGL ES 2.0 requires glTexImage2D internalformat == format.
+   In the packed 16-bit texture uploads, use GL_RGBA as internalformat
+   with GL_RGBA as format, retaining UNSIGNED_SHORT_5_5_5_1 / 4_4_4_4.
+   Desktop GL keeps GL_RGB5_A1 and GL_RGBA4.
+2. Enable GLES2 core packed pixel upload support independently of the old
+   desktop GL_EXT_packed_pixels extension string.
+3. Optional *per-GL-call* instrumentation: PYRA_GL_CALL_TRACE=1 causes the
+   wrappers in renderer/dyna_gl.h to check GL errors immediately and log the
+   offending function. This has overhead; leave disabled for normal play.
+4. PYRA_GL_TRACE=1 additionally records current GL program and number of
+   polygons/uploads in selected frames.
+
+Build and run:
+  ./build-pyra.sh 2>&1 | tee build-pyra.log
+  PYRA_GL_CALL_TRACE=1 PYRA_GL_TRACE=1 ./run-pyra.sh 2>&1 | tee run-pyra.log
+
+Look for:
+  PYRA GLES2: using core 16-bit RGBA texture uploads
+  PYRA GL CALL ERROR #N: glTexImage2D -> 0x0502
+  PYRA FRAME ... program=... polys=... uploads=...
+
+The error source was not proven on actual Pyra hardware; the trace allows
+identifying it if the texture fix alone is insufficient.

@@ -1,0 +1,13 @@
+set(CMAKE_FOLDER "netgames")
+
+include_directories("includes")
+add_subdirectory(dmfc)
+add_subdirectory(anarchy)
+add_subdirectory(coop)
+add_subdirectory(ctf)
+add_subdirectory(entropy)
+add_subdirectory(hoard)
+add_subdirectory(hyperanarchy)
+add_subdirectory(monsterball)
+add_subdirectory(roboanarchy)
+add_subdirectory(tanarchy)

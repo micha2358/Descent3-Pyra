@@ -1,0 +1,185 @@
+/*
+* Descent 3 
+* Copyright (C) 2024 Parallax Software
+*
+* This program is free software: you can redistribute it and/or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation, either version 3 of the License, or
+* (at your option) any later version.
+*
+* This program is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+* GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+--- HISTORICAL COMMENTS FOLLOW ---
+
+ * $Logfile: /DescentIII/Main/ddio_common/ddio.cpp $
+ * $Revision: 18 $
+ * $Date: 10/21/99 9:27p $
+ * $Author: Jeff $
+ *
+ * Common DDIO Initialization
+ *
+ * $Log: /DescentIII/Main/ddio_common/ddio.cpp $
+ *
+ * 18    10/21/99 9:27p Jeff
+ * B.A. Macintosh code merge
+ *
+ * 17    8/11/99 3:09p Samir
+ * win32 as well calls ddioInternalJoyFrame.
+ *
+ * 16    7/28/99 5:18p Kevin
+ * Mac merge fixes
+ *
+ * 15    7/28/99 3:33p Kevin
+ * Mac!
+ *
+ * 14    4/22/99 1:56a Jeff
+ * pass in ddio_init_info to keyboard handlers
+ *
+ * 13    4/09/99 12:02p Samir
+ * joystick changes (Win32 DirectInput support)
+ *
+ * 12    2/21/99 6:38p Samir
+ * mouse and key input better. buffered mouse.
+ *
+ * 11    1/25/99 6:47p Samir
+ * allow slow keyboard
+ *
+ * 10    10/20/98 12:58a Jeff
+ * added a way to force a lo-resolution timer
+ *
+ * 9     10/16/98 1:03p Samir
+ * fixed timer issue when closing ddio, should not close timer.
+ *
+ * 8     6/30/98 4:20p Samir
+ * added ddio_Close as standalone.   ddio_Init will no longer close
+ * itself.
+ *
+ * 7     6/29/98 6:46p Samir
+ * MouseInit no longer takes in required number of mouse buttons.
+ *
+ * 6     12/09/97 2:08p Samir
+ * Non preemptive keyboard as of now?
+ *
+ * 5     10/23/97 2:58p Samir
+ * Took out extranneous messages.
+ *
+ * 4     10/17/97 5:18p Samir
+ * ddio_Init now does mouse opening and closing, where it should be.
+ *
+ * 3     10/17/97 5:03p Samir
+ * Default to preemptive keyboard handler (not under NT).
+ *
+ * 2     10/16/97 2:28p Samir
+ * move keyboard init into ddio_init and added preemptive select for
+ * keyboard.
+ *
+ * 2     5/12/97 1:21p Samir
+ * Commented out timer hook function calls.
+ *
+ * 1     5/08/97 1:54p Samir
+ * Created skeletal initialization functions.
+ *
+ * $NoKeywords: $
+ */
+
+#include <cstdlib>
+
+#include <SDL3/SDL.h>
+
+#include "ddio.h"
+#include "ddio_lnx.h"
+#include "joystick.h"
+#include "log.h"
+#include "pserror.h"
+
+static bool DDIO_initialized = false;
+static void (*DDIO_quit_handler)() = nullptr;
+void ddio_SetQuitHandler(void (*handler)()) { DDIO_quit_handler = handler; }
+// ----------------------------------------------------------------------------
+//	Common initialization
+// ----------------------------------------------------------------------------
+//	Initializes DDIO system
+bool ddio_Init(ddio_init_info *init_info) {
+  static bool first_time = true;
+  bool res;
+  ASSERT(!DDIO_initialized);
+  if (first_time) {
+    atexit(ddio_Close);
+  }
+  LOG_DEBUG << "DDIO system initializing...";
+  res = ddio_InternalInit(init_info);
+  if (res) {
+    if (first_time) { // initialize once and only once.
+      timer_Init();
+    }
+    if (!ddio_KeyInit(init_info))
+      Error("Failed to initialize keyboard system.");
+    ddio_MouseInit();
+  }
+  first_time = false;
+  DDIO_initialized = true;
+  joy_Init();
+  return res;
+}
+void ddio_Close() {
+  if (DDIO_initialized) {
+    joy_Close();
+    ddio_MouseClose();
+    ddio_KeyClose();
+    ddio_InternalClose();
+    LOG_DEBUG << "DDIO system closed.";
+    DDIO_initialized = false;
+  }
+}
+void ddio_Suspend() {
+  ddio_InternalKeySuspend();
+  ddio_InternalMouseSuspend();
+}
+void ddio_Resume() {
+  ddio_InternalKeyResume();
+  ddio_InternalMouseResume();
+}
+// handles buffered input from devices once per frame.
+void ddio_Frame() {
+  SDL_Event event;
+  while (SDL_PollEvent(&event)) {
+    switch (event.type) {
+    case SDL_EVENT_KEY_UP:
+    case SDL_EVENT_KEY_DOWN:
+      sdlKeyEvent(&event);
+      break;
+    case SDL_EVENT_JOYSTICK_BALL_MOTION:
+    case SDL_EVENT_MOUSE_MOTION:
+      sdlMouseMotionEvent(&event);
+      break;
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+      sdlMouseButtonUpEvent(&event);
+      break;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+      sdlMouseButtonDownEvent(&event);
+      break;
+    case SDL_EVENT_MOUSE_WHEEL:
+      sdlMouseWheelEvent(&event);
+      break;
+    case SDL_EVENT_QUIT:
+      // Do not reproduce upstream's SDL_Quit()+_exit() here: on Pyra the
+      // native EGL context must be destroyed before SDL tears down X11.
+      if (DDIO_quit_handler)
+        DDIO_quit_handler();
+      else
+        std::exit(0);
+      return;
+    default:
+      break;
+    }
+  }
+  ddio_InternalKeyFrame();
+  ddio_InternalMouseFrame();
+  ddio_InternalJoyFrame();
+}

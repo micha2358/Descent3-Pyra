@@ -1,0 +1,22 @@
+Descent 3 / DragonBox Pyra - PowerVR GLES2 present-fix 2
+2026-10-17
+
+Observation:
+- Initial menu/movie scaling now fills the SDL display correctly, but
+  presentation becomes transient after first frames.
+- Runtime log confirms PowerVR SGX 544MP and complete 640x480 FBO.
+
+Changes in renderer/HardwareOpenGL.cpp:
+- Keep window framebuffer (0) bound through SDL_GL_SwapWindow. The
+  previous presentation code rebound the game FBO before the swap.
+- Rebind the game FBO after SDL_GL_SwapWindow, as the original desktop
+  render path did.
+- Bind FBO at rend_StartFrame to defend against window surface transitions.
+- Check SDL3's bool SDL_GL_SwapWindow return and log failures once.
+- Optional low-overhead trace (off by default):
+    PYRA_GL_TRACE=1 ./run-pyra.sh 2>&1 | tee pyra-frames.log
+  First five frames and then every 120th frame show expected FBO binding,
+  GL error and FBO completeness.
+
+This is a targeted PowerVR WSEGL test; ARMv7/SGX runtime success remains
+unverified until built and executed on the Pyra.

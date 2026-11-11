@@ -1,0 +1,66 @@
+/*
+* Descent 3 
+* Copyright (C) 2024 Parallax Software
+*
+* This program is free software: you can redistribute it and/or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation, either version 3 of the License, or
+* (at your option) any later version.
+*
+* This program is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+* GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+--- HISTORICAL COMMENTS FOLLOW ---
+
+ * $Logfile: /DescentIII/Main/ddio_lnx/lnxkey.cpp $
+ * $Revision: 1.3 $
+ * $Date: 2004/02/25 00:04:06 $
+ * $Author: ryan $
+ *
+ * Linux keyboard routines
+ *
+ * $Log: lnxkey.cpp,v $
+ * Revision 1.3  2004/02/25 00:04:06  ryan
+ * Removed loki_utils dependency and ported to MacOS X (runs, but incomplete).
+ *
+ * Revision 1.2  2000/04/27 11:17:07  icculus
+ * Removed some keyboard drivers, added SDL hooks.
+ *
+ * Revision 1.1.1.1  2000/04/18 00:00:33  icculus
+ * initial checkin
+ *
+ *
+ * 13    7/14/99 9:06p Jeff
+ * added comment header
+ *
+ * $NoKeywords: $
+ */
+
+/*
+ * Linux Keyboard Interface, Non-SVGALIB Implementation
+ * $NoKeywords: $
+ */
+
+// ----------------------------------------------------------------------------
+//	Keyboard Interface
+// ----------------------------------------------------------------------------
+#include "ddio.h"
+#include "lnxkey_sdl.h"
+
+// The dedicated/server SDL dummy video driver still uses SDL's keyboard
+// implementation. Upstream removed the separate null keyboard backend.
+bool ddio_InternalKeyInit(ddio_init_info *init_info) { return ddio_sdl_InternalKeyInit(init_info); }
+void ddio_InternalKeyClose() { ddio_sdl_InternalKeyClose(); }
+bool ddio_InternalKeyState(uint8_t key) { return ddio_sdl_InternalKeyState(key); }
+void ddio_InternalKeySuspend() { ddio_sdl_InternalKeySuspend(); }
+void ddio_InternalKeyResume() { ddio_sdl_InternalKeyResume(); }
+float ddio_InternalKeyDownTime(uint8_t key) { return ddio_sdl_InternalKeyDownTime(key); }
+void ddio_InternalResetKey(uint8_t key) { ddio_sdl_InternalResetKey(key); }
+bool ddio_KeyFrame() { return true; }
+void ddio_InternalKeyFrame() { ddio_sdl_InternalKeyFrame(); }
+void ddio_SetKeyboardLanguage(int) {}

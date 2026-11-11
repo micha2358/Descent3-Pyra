@@ -1,0 +1,36 @@
+/*
+ * Copyright (C) 2002-2024 D2X Project
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#ifndef INCLUDED_MVE_AUDIO_H
+#include <cstddef>
+#define INCLUDED_MVE_AUDIO_H
+
+/**
+ * Process input data and send parsed data into queue buffer
+ * @param buffer output queue buffer
+ * @param data input data
+ * @param sample_size size of sample (1 for 8 bit, 2 for 16 bit)
+ * @param is_compress true if input data is compressed
+ */
+void mveaudio_process(char *buffer, unsigned char *data, int sample_size, bool is_compressed = true);
+
+// Bounded variant for untrusted MVE segments. Returns false on truncated
+// payloads; always initializes the entire destination buffer.
+bool mveaudio_process_bounded(char *out, size_t outBytes, const unsigned char *packet,
+                              size_t packetBytes, int sampleSize, bool compressed, int channels);
+
+#endif /* INCLUDED_MVE_AUDIO_H */

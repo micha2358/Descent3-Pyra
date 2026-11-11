@@ -1,0 +1,535 @@
+/*
+* Descent 3
+* Copyright (C) 2024 Parallax Software
+*
+* This program is free software: you can redistribute it and/or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation, either version 3 of the License, or
+* (at your option) any later version.
+*
+* This program is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+* GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+
+#include "application.h"
+#include "args.h"
+#include "bitmap.h"
+#include "d3movie.h"
+#include "ddio.h"
+#include "game.h"
+#include "gamefont.h"
+#include "grtext.h"
+#include "log.h"
+#include "mem.h"
+#include "mvelib.h"
+#include "renderer.h"
+
+namespace {
+MovieFrameCallback_fp Movie_callback = nullptr;
+uint16_t CurrentPalette[256];
+int Movie_bm_handle = -1;
+uint32_t Movie_current_framenum = 0;
+bool Movie_looping = false;
+int Movie_render_x = 0;
+int Movie_render_y = 0;
+int Movie_render_w = 640;
+int Movie_render_h = 480;
+} // namespace
+
+static void *CallbackAlloc(uint32_t size);
+static void CallbackFree(void *p);
+static uint32_t CallbackFileRead(void *stream, void *pBuffer, uint32_t bufferCount);
+static void InitializePalette();
+static void CallbackSetPalette(const uint8_t *pBuffer, uint32_t start, uint32_t count);
+static void CallbackShowFrame(uint8_t *buf, uint32_t bufw, uint32_t bufh, uint32_t sx,
+                              uint32_t sy, uint32_t w, uint32_t h, uint32_t dstx, uint32_t dsty,
+                              uint32_t hicolor);
+
+#ifndef NO_MOVIES
+static bool mve_InitSound();
+static void mve_CloseSound();
+#endif
+
+int mve_Init() {
+#ifndef NO_MOVIES
+  return MVELIB_NOERROR;
+#else
+  return MVELIB_INIT_ERROR;
+#endif
+}
+
+// callback called per frame of playback of movies.
+void mve_SetCallback(MovieFrameCallback_fp callBack) {
+#ifndef NO_MOVIES
+  Movie_callback = callBack;
+#endif
+}
+
+// used to tell movie library how to render movies.
+void mve_SetRenderProperties(int16_t x, int16_t y, int16_t w, int16_t h, renderer_type type, bool hicolor) {
+  Movie_render_x = x;
+  Movie_render_y = y;
+  Movie_render_w = w > 0 ? w : 640;
+  Movie_render_h = h > 0 ? h : 480;
+}
+
+// plays a movie using the current screen.
+int mve_PlayMovie(const std::filesystem::path &pMovieName, oeApplication *pApp) {
+#ifndef NO_MOVIES
+  // first, find that movie.
+  std::filesystem::path real_name = cf_LocatePath("movies" / pMovieName);
+  if (real_name.empty()) {
+    LOG_ERROR << "MOVIE: File " << pMovieName << " not found, skipping playback";
+    return MVELIB_FILE_ERROR;
+  }
+  // open movie file.
+  FILE *hFile = fopen(PATH_TO_CSTR(real_name), "rb");
+  if (hFile == nullptr) {
+    LOG_ERROR << "MOVIE: Unable to open " << pMovieName;
+    return MVELIB_FILE_ERROR;
+  }
+
+  // setup
+  MVE_sfCallbacks(CallbackShowFrame);
+  MVE_memCallbacks(CallbackAlloc, CallbackFree);
+  MVE_ioCallbacks(CallbackFileRead);
+  MVE_palCallbacks(CallbackSetPalette);
+  InitializePalette();
+  Movie_bm_handle = -1;
+
+  if (!mve_InitSound()) {
+    LOG_ERROR << "Failed to initialize sound";
+    fclose(hFile);
+    return MVELIB_INIT_ERROR;
+  }
+
+  MVESTREAM *mve = MVE_rmPrepMovie(hFile, -1, -1, 0);
+  if (mve == nullptr) {
+    LOG_ERROR.printf("Failed to prepMovie %s", PATH_TO_CSTR(pMovieName));
+    fclose(hFile);
+    mve_CloseSound();
+    return MVELIB_INIT_ERROR;
+  }
+
+  MVE_videoSpec movieSpec{};
+  MVE_getVideoSpec(&movieSpec);
+  LOG_INFO.printf("PYRA MOVIE: playing %s stream=%dx%d picture=%dx%d color=%s",
+                  PATH_TO_CSTR(pMovieName), movieSpec.screenWidth,
+                  movieSpec.screenHeight, movieSpec.width, movieSpec.height,
+                  movieSpec.truecolor ? "RGB555" : "paletted 8-bit");
+
+  bool aborted = false;
+  Movie_current_framenum = 0;
+  int result;
+  while ((result = MVE_rmStepMovie(mve)) == 0) {
+    // let the OS do its thing
+    pApp->defer();
+
+    // check for bail
+    int key = ddio_KeyInKey();
+    if (key == KEY_ESC) {
+      aborted = true;
+      break;
+    }
+  }
+
+  // free our bitmap
+  if (Movie_bm_handle != -1) {
+    bm_FreeBitmap(Movie_bm_handle);
+    Movie_bm_handle = -1;
+  }
+
+  // close our file handle
+  fclose(hFile);
+
+  // determine the return code
+  int err = MVELIB_NOERROR;
+  if (aborted) {
+    err = MVELIB_PLAYBACK_ABORTED;
+  } else if (result != MVE_ERR_EOF) {
+    err = MVELIB_PLAYBACK_ERROR;
+  }
+
+  // cleanup and shutdown
+  MVE_rmEndMovie(mve);
+
+  // reset sound
+  mve_CloseSound();
+
+  LOG_INFO.printf("PYRA MOVIE: %s frames=%u result=%s", PATH_TO_CSTR(pMovieName),
+                  Movie_current_framenum,
+                  aborted ? "user aborted" : (err == MVELIB_NOERROR ? "completed" : "decoder error"));
+
+  // return out
+  return err;
+#else
+  return MVELIB_INIT_ERROR;
+#endif
+}
+
+void *CallbackAlloc(uint32_t size) { return mem_malloc(size); }
+
+void CallbackFree(void *p) { mem_free(p); }
+
+uint32_t CallbackFileRead(void *stream, void *pBuffer, uint32_t bufferCount) {
+  uint32_t numRead = fread(pBuffer, 1, bufferCount, (FILE *)stream);
+  return (numRead == bufferCount) ? 1 : 0;
+}
+
+void InitializePalette() {
+  for (unsigned short & i : CurrentPalette) {
+    i = OPAQUE_FLAG | GR_RGB16(0, 0, 0);
+  }
+}
+
+void CallbackSetPalette(const uint8_t *pBuffer, uint32_t start, uint32_t count) {
+#ifndef NO_MOVIES
+  // pBuffer already points at the first changed RGB triplet, including
+  // for the mask-compressed 0x0d palette updates.
+  if (!pBuffer || start > 256 || count > 256 - start) return;
+
+  for (uint32_t i = 0; i < count; ++i) {
+    uint32_t r = pBuffer[0] << 2;
+    uint32_t g = pBuffer[1] << 2;
+    uint32_t b = pBuffer[2] << 2;
+    pBuffer += 3;
+
+    CurrentPalette[start + i] = OPAQUE_FLAG | GR_RGB16(r, g, b);
+  }
+#endif
+}
+
+int NextPow2(int n) {
+  n--;
+  n |= n >> 1;
+  n |= n >> 2;
+  n |= n >> 4;
+  n |= n >> 8;
+  n |= n >> 16;
+  n++;
+  return n;
+}
+
+#ifndef NO_MOVIES
+void BlitToMovieBitmap(uint8_t *buf, uint32_t bufw, uint32_t bufh, uint32_t hicolor,
+                       bool usePow2Texture, int &texW, int &texH) {
+  // get some sizes
+  int drawWidth = bufw;
+  int drawHeight = bufh;
+
+  if (usePow2Texture) {
+    int wPow2 = NextPow2(drawWidth);
+    int hPow2 = NextPow2(drawHeight);
+    int texSize = (wPow2 > hPow2) ? wPow2 : hPow2;
+    texW = texSize;
+    texH = texSize;
+  } else {
+    texW = drawWidth;
+    texH = drawHeight;
+  }
+
+  if (Movie_bm_handle == -1) {
+    // Allocate our bitmap
+    Movie_bm_handle = bm_AllocBitmap(texW, texH, 0);
+  }
+
+  uint16_t *pPixelData = (uint16_t *)bm_data(Movie_bm_handle, 0);
+  GameBitmaps[Movie_bm_handle].flags |= BF_CHANGED;
+  // Dump the *decoded CPU pixels* before GLES2 uploads when diagnosing
+  // block artefacts. If the PPM already has blocks, the fault is in the
+  // MVE frame decoder. Otherwise investigate the PowerVR texture path.
+  if (std::getenv("PYRA_MOVIE_DUMP") &&
+      (Movie_current_framenum == 0 || Movie_current_framenum == 20 || Movie_current_framenum == 60)) {
+    static unsigned dumps = 0;
+    if (dumps++ < 12 && drawWidth > 0 && drawHeight > 0 && drawWidth <= 2048 && drawHeight <= 2048) {
+      std::error_code ec;
+      const std::filesystem::path dumpDir = "/tmp/descent3-mve-dumps";
+      std::filesystem::create_directories(dumpDir, ec);
+      if (!ec) {
+        const std::filesystem::path dumpPath = dumpDir /
+            ("frame-" + std::to_string(dumps) + "-video-frame-" +
+             std::to_string(Movie_current_framenum) + ".ppm");
+        std::ofstream file(dumpPath, std::ios::binary);
+        if (file) {
+          file << "P6\n" << drawWidth << ' ' << drawHeight << "\n255\n";
+          for (int y = 0; y < drawHeight; ++y) {
+            for (int x = 0; x < drawWidth; ++x) {
+              uint16_t pixel = hicolor ? reinterpret_cast<const uint16_t *>(buf)[y * drawWidth + x] :
+                                           CurrentPalette[buf[y * drawWidth + x]];
+              unsigned char rgb[3] = {static_cast<unsigned char>(((pixel >> 10) & 31) * 255 / 31),
+                                      static_cast<unsigned char>(((pixel >> 5) & 31) * 255 / 31),
+                                      static_cast<unsigned char>((pixel & 31) * 255 / 31)};
+              file.write(reinterpret_cast<const char *>(rgb), 3);
+            }
+          }
+          LOG_INFO.printf("PYRA MOVIE: saved decoded pre-GPU frame %s", dumpPath.c_str());
+        }
+      }
+    }
+  }
+  if (hicolor) {
+    uint16_t *wBuf = (uint16_t *)buf;
+    for (int y = 0; y < drawHeight; ++y) {
+      for (int x = 0; x < drawWidth; ++x) {
+        uint16_t col16 = *wBuf++;
+        // Convert to RGB555
+        pPixelData[x] = col16 | OPAQUE_FLAG;
+      }
+
+      pPixelData += texW;
+    }
+  } else {
+    for (int y = 0; y < drawHeight; ++y) {
+      for (int x = 0; x < drawWidth; ++x) {
+        uint8_t palIndex = *buf++;
+        pPixelData[x] = CurrentPalette[palIndex];
+      }
+
+      pPixelData += texW;
+    }
+  }
+}
+
+void CallbackShowFrame(uint8_t *buf, uint32_t bufw, uint32_t bufh, uint32_t sx, uint32_t sy,
+                       uint32_t w, uint32_t h, uint32_t dstx, uint32_t dsty, uint32_t hicolor) {
+  // prepare our bitmap
+  int texW, texH;
+  BlitToMovieBitmap(buf, bufw, bufh, hicolor, true, texW, texH);
+
+  // calculate UVs from texture
+  unsigned int drawWidth = bufw;
+  unsigned int drawHeight = bufh;
+  float u = float(drawWidth) / float(texW);
+  float v = float(drawHeight) / float(texH);
+
+  StartFrame(0, 0, Movie_render_w, Movie_render_h, false);
+
+  rend_ClearScreen(GR_BLACK);
+  rend_SetAlphaType(AT_CONSTANT);
+  rend_SetAlphaValue(255);
+  rend_SetLighting(LS_NONE);
+  rend_SetColorModel(CM_MONO);
+  rend_SetOverlayType(OT_NONE);
+  rend_SetWrapType(WT_CLAMP);
+  rend_SetFiltering(0);
+  rend_SetZBufferState(0);
+  // Full-screen movie playback: fit the decoded picture inside the
+  // cinematic 640x480 region.  Source files vary between .mv8/.mve and
+  // need not have the game's display dimensions.  Preserve aspect ratio
+  // and center the picture; the normal game presentation shader handles
+  // any further scaling from 640x480 to the physical LCD.
+  if (drawWidth && drawHeight && Movie_render_w > 0 && Movie_render_h > 0) {
+    const double scale = std::min(double(Movie_render_w) / drawWidth,
+                                  double(Movie_render_h) / drawHeight);
+    const int outputW = std::max(1, int(drawWidth * scale + 0.5));
+    const int outputH = std::max(1, int(drawHeight * scale + 0.5));
+    const int outputX = Movie_render_x + (Movie_render_w - outputW) / 2;
+    const int outputY = Movie_render_y + (Movie_render_h - outputH) / 2;
+    const char *movieScale = std::getenv("PYRA_MOVIE_SCALE");
+    const bool nativeSize = movieScale && std::strcmp(movieScale, "native") == 0;
+    if (Movie_current_framenum == 0) {
+      LOG_INFO.printf("PYRA MOVIE: first frame %ux%u, canvas=%dx%d, draw=%dx%d at (%d,%d), scale=%s",
+                      drawWidth, drawHeight, Movie_render_w, Movie_render_h,
+                      nativeSize ? int(drawWidth) : outputW,
+                      nativeSize ? int(drawHeight) : outputH,
+                      nativeSize ? int(dstx) : outputX,
+                      nativeSize ? int(dsty) : outputY,
+                      nativeSize ? "native" : "fit");
+    }
+    if (nativeSize)
+      rend_DrawScaledBitmap(dstx, dsty, dstx + drawWidth, dsty + drawHeight,
+                            Movie_bm_handle, 0.0f, 0.0f, u, v);
+    else
+      rend_DrawScaledBitmap(outputX, outputY, outputX + outputW, outputY + outputH,
+                            Movie_bm_handle, 0.0f, 0.0f, u, v);
+  }
+  rend_SetFiltering(1);
+  rend_SetZBufferState(1);
+
+  // call our callback
+  if (Movie_callback != nullptr) {
+    Movie_callback(dstx, dsty, Movie_current_framenum);
+  }
+  ++Movie_current_framenum;
+
+  EndFrame();
+
+  rend_Flip();
+}
+
+// This callback is same as CallbackShowFrame() but don't flip renderer at end, so there no flickering
+void CallbackShowFrameNoFlip(unsigned char *buf, unsigned int bufw, unsigned int bufh, unsigned int sx, unsigned int sy,
+                       unsigned int w, unsigned int h, unsigned int dstx, unsigned int dsty, unsigned int hicolor) {
+  // prepare our bitmap
+  int texW, texH;
+  BlitToMovieBitmap(buf, bufw, bufh, hicolor, true, texW, texH);
+
+  // calculate UVs from texture
+  unsigned int drawWidth = bufw;
+  unsigned int drawHeight = bufh;
+  float u = float(drawWidth) / float(texW);
+  float v = float(drawHeight) / float(texH);
+
+  StartFrame(0, 0, 640, 480, false);
+
+  rend_ClearScreen(GR_BLACK);
+  rend_SetAlphaType(AT_CONSTANT);
+  rend_SetAlphaValue(255);
+  rend_SetLighting(LS_NONE);
+  rend_SetColorModel(CM_MONO);
+  rend_SetOverlayType(OT_NONE);
+  rend_SetWrapType(WT_CLAMP);
+  rend_SetFiltering(0);
+  rend_SetZBufferState(0);
+  rend_DrawScaledBitmap(dstx, dsty, dstx + drawWidth, dsty + drawHeight, Movie_bm_handle, 0.0f, 0.0f, u, v);
+  rend_SetFiltering(1);
+  rend_SetZBufferState(1);
+
+  // call our callback
+  if (Movie_callback != nullptr) {
+    Movie_callback(dstx, dsty, Movie_current_framenum);
+  }
+  ++Movie_current_framenum;
+
+  EndFrame();
+}
+#endif
+
+intptr_t mve_SequenceStart(const char *mvename, void *fhandle, oeApplication *app, bool looping) {
+#ifndef NO_MOVIES
+  // first, find that movie..
+  std::filesystem::path real_name = cf_LocatePath(std::filesystem::path("movies") / mvename);
+  fhandle = fopen(PATH_TO_CSTR(real_name), "rb");
+
+  if (fhandle == nullptr) {
+    LOG_WARNING.printf("MOVIE: Unable to open %s", PATH_TO_CSTR(real_name));
+    return 0;
+  }
+
+  // setup
+  MVE_memCallbacks(CallbackAlloc, CallbackFree);
+  MVE_ioCallbacks(CallbackFileRead);
+  MVE_sfCallbacks(CallbackShowFrameNoFlip);
+  MVE_palCallbacks(CallbackSetPalette);
+  InitializePalette();
+  Movie_bm_handle = -1;
+  Movie_looping = looping;
+
+  // let the render know we will be copying bitmaps to framebuffer (or something)
+  rend_SetFrameBufferCopyState(true);
+
+  MVESTREAM *mve = MVE_rmPrepMovie(fhandle, -1, -1, 0);
+  if (mve == nullptr) {
+    LOG_ERROR.printf("Failed to PrepMovie %s", mvename);
+    fclose((FILE *)fhandle);
+    return MVELIB_INIT_ERROR;
+  }
+
+  return (intptr_t)mve;
+#else
+  return nullptr;
+#endif
+}
+
+intptr_t mve_SequenceFrame(intptr_t handle, void *fhandle, bool sequence, int *bm_handle) {
+#ifndef NO_MOVIES
+  if (bm_handle) {
+    *bm_handle = -1;
+  }
+
+  if (handle == -1) {
+    return -1;
+  }
+
+  static unsigned sw = 0, sh = 0, hicolor = 0;
+  int err = 0;
+
+reread_frame:
+
+  // get the next frame of data
+  uint8_t *pBuffer = nullptr;
+  err = MVE_rmStepMovie((MVESTREAM *)handle);
+
+  if (err == 0) {
+    // blit to bitmap
+    int texW, texH;
+    BlitToMovieBitmap(pBuffer, sw, sh, hicolor, false, texW, texH);
+
+    if (bm_handle) {
+      *bm_handle = Movie_bm_handle;
+    }
+
+    return handle;
+  }
+
+  if (Movie_looping && err == MVE_ERR_EOF) {
+    mve_reset((MVESTREAM *)handle);
+    sequence = true;
+    goto reread_frame;
+  }
+
+  return -1;
+#else
+  return -1;
+#endif
+}
+
+bool mve_SequenceClose(intptr_t hMovie, void *hFile) {
+#ifndef NO_MOVIES
+  if (hMovie == -1)
+    return false;
+
+  MVE_rmEndMovie((MVESTREAM *)hMovie);
+
+  // free our bitmap
+  if (Movie_bm_handle != -1) {
+    bm_FreeBitmap(Movie_bm_handle);
+    Movie_bm_handle = -1;
+  }
+
+  // We're no longer needing this
+  rend_SetFrameBufferCopyState(false);
+
+  return true;
+#else
+  return false;
+#endif
+}
+
+void mve_Puts(int16_t x, int16_t y, ddgr_color col, const char *txt) {
+  grtext_SetFont(BRIEFING_FONT);
+  grtext_SetColor(col);
+  grtext_SetAlpha(255);
+  grtext_SetFlags(GRTEXTFLAG_SHADOW);
+  grtext_CenteredPrintf(0, y, txt);
+  grtext_Flush();
+}
+
+void mve_ClearRect(int16_t x1, int16_t y1, int16_t x2, int16_t y2) {
+  // Note: I can not figure out how to clear, and then write over it with text. It always covers my text!
+  // rend_FillRect( GR_BLACK, x1, y1, x2, y2 );
+}
+
+#ifndef NO_MOVIES
+bool mve_InitSound() {
+  MVE_sndInit(FindArg("-nosound") == 0);
+
+  return true;
+}
+
+void mve_CloseSound() {
+  // TODO: close the driver out
+}
+
+#endif

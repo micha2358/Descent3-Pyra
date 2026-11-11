@@ -1,0 +1,42 @@
+/*
+* Descent 3
+* Copyright (C) 2024 Parallax Software
+*
+* This program is free software: you can redistribute it and/or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation, either version 3 of the License, or
+* (at your option) any later version.
+*
+* This program is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+* GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+--- HISTORICAL COMMENTS FOLLOW ---
+
+ *
+ * $NoKeywords: $
+ */
+
+#ifndef DDIO_LNX_H
+#define DDIO_LNX_H
+
+#include "application.h"
+
+union SDL_Event;
+
+extern oeLnxApplication *Lnx_app_obj;
+
+void sdlKeyEvent(const SDL_Event *event);
+void sdlMouseButtonUpEvent(const SDL_Event *event);
+void sdlMouseButtonDownEvent(const SDL_Event *event);
+void sdlMouseWheelEvent(const SDL_Event *event);
+void sdlMouseMotionEvent(const SDL_Event *event);
+
+// Pyra: maintain the custom orderly EGL/PowerVR shutdown on window close.
+void ddio_SetQuitHandler(void (*handler)());
+
+#endif

@@ -1,0 +1,35 @@
+Descent 3 Pyra GLES2 changes
+============================
+Target: DragonBox Pyra / Debian 12 armhf / OMAP5432 Cortex-A15 / PowerVR SGX544MP
+
+Graphics:
+- Added PYRA_GLES2 build mode (default ON).
+- Native OpenGL ES 2.0 context, no desktop GL 3.2 core context on Pyra.
+- Fixed PowerVR GLESv2 library path; removed libGL.so fallback from active renderer.
+- Runtime verification requires Imagination/PowerVR SGX.
+- GLSL 150 core shaders converted to GLSL ES 1.00.
+- Removed VAO dependency in Pyra path.
+- Replaced glMapBufferRange streaming with glBufferSubData on Pyra.
+- Replaced glGetStringi extension enumeration with GLES2 GL_EXTENSIONS parsing.
+- Replaced ES3/desktop framebuffer blit on Pyra with GLES2 offscreen FBO + textured-quad presentation.
+- Scale the logical render target to actual SDL3 window pixels (aspect preserved).
+- Preserve prior frame contents in the offscreen FBO for movie/menu rendering.
+- PowerVR EGL/GLES rpath: /opt/omap5-sgx-ddk-um-linux/lib.
+
+CPU/build:
+- -O2 -pipe -mcpu=cortex-a15 -mfpu=neon-vfpv4 -mfloat-abi=hard -fomit-frame-pointer
+- Ninja helper uses -j2 for the dual Cortex-A15.
+- vcpkg disabled by build-pyra.sh.
+
+Removed from package:
+- legacy/ (including old Mesa-aware renderer)
+- win32/, dd_grwin32/, editor/
+- lib/win/ DirectX headers/libraries
+- .github CI metadata
+- vcpkg manifests/configuration and macOS Brewfile
+
+Important:
+The supplied upstream revision has already migrated its platform/input/audio code to SDL3.
+This patch converts the graphics renderer to GLES2 but does NOT pretend that SDL3 was
+converted to SDL2. A true SDL2 migration touches the platform, audio, joystick, window,
+thread and networking modules and should be validated separately on the Pyra.

@@ -1,0 +1,28 @@
+Descent 3 / DragonBox Pyra - Texture-ID Fix 4
+===============================================
+Source: Texture-Fix 3, with one targeted correction in
+renderer/HardwareOpenGL.cpp.
+
+Root-cause hypothesis, strongly supported by the PowerVR log:
+  * GLES2 shader/FBO handles in the run log are 70001 (> 65535).
+  * Descent 3 previously cached glGenTextures() GLuint handles in
+    uint16_t bitmap/lightmap remap arrays, silently truncating names.
+  * glTexSubImage2D was repeatedly failing with GL_INVALID_OPERATION.
+  * Truncated names can cause a new/undefined texture to be rebound.
+
+Changes:
+  * Change bitmap/lightmap remap entries from uint16_t to GLuint.
+  * Allocate remap arrays using sizeof(GLuint).
+  * Replace the 65535 sentinel with a full-width invalid GLuint.
+  * Keep generated/bound texture IDs as GLuint throughout this path.
+  * Log the first twelve native PowerVR glGenTextures() handles at boot.
+  * Preserve native EGL/GLES2, SDL3, offscreen presentation, and packed
+    16-bit RGBA upload logic from the previous release.
+
+On device:
+  ./build-pyra.sh 2>&1 | tee build-pyra.log
+  PYRA_GL_TRACE=1 PYRA_GL_CALL_TRACE=1 ./run-pyra.sh 2>&1 | tee run-pyra.log
+
+If the IDs shown by 'PYRA texture id' are > 65535, the truncation is
+confirmed as a real defect. The game/menu display must still be verified
+on the actual hardware. This archive is not hardware-tested.

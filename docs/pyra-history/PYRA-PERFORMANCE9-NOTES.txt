@@ -1,0 +1,59 @@
+Descent 3 / DragonBox Pyra - Performance 9
+==========================================
+
+Built on Performance 8. The established fixes for native PowerVR EGL/GLES2,
+32-bit PowerVR texture names, GLES2 offscreen presentation, orphan VBO
+streaming, and the optimized GL state cache are all retained.
+
+1. Resolution separation (ON by default)
+-----------------------------------------
+Select the 1280x720 resolution in Descent 3. Performance 9 keeps the
+1280x720 game / HUD / clipping coordinate system intact, but creates a
+1024x576 physical GL color texture and 16-bit depth buffer for rendering.
+The previous GLES2 full-screen presentation shader then scales that texture
+to the 1280x720 SDL display using GL_LINEAR filtering. The 16:9 aspect ratio
+is unchanged. With 640x480 game/intro/menu modes there is NO downscaling;
+they preserve the previous rendering behavior and 4:3 aspect ratio.
+
+Default: PYRA_3D_1024=1 (implicit)
+A/B test: PYRA_3D_1024=0 (native 1280x720 internal rendering)
+
+The logical game resolution remains unchanged. Game GL viewport/scissor
+calls and pixel reads/screenshot paths translate appropriately to the
+smaller physical framebuffer. Screenshots are returned in logical dimensions
+via CPU nearest-neighbor expansion; the on-screen image uses GL_LINEAR.
+
+2. GPU sync and swap diagnostics (only opt-in)
+------------------------------------------------
+PYRA_VSYNC=0/1  Requests an explicit SDL3 EGL swap interval; the renderer
+                logs whether the driver accepted the request and what
+                interval SDL reports. No override is applied by default.
+PYRA_GPU_SYNC=none|flush|finish  Before presenting, optionally run glFlush()
+                or glFinish() and report its CPU duration. glFinish() is a
+                deliberately slow GPU wait, useful ONLY to diagnose where
+                driver synchronization takes place. Default is none.
+PYRA_PERF=1     Logs prior PERF7/PERF8 counters plus
+                PYRA PERF9: logical=... internal=... output=...
+                            vsync=... gpuSync=... syncCPU=...ms/frame
+
+3. Benchmarks
+-------------
+./build-pyra.sh 2>&1 | tee build-pyra.log
+./benchmark-pyra.sh batch      # logical 1280x720, internal 1024x576
+./benchmark-pyra.sh native     # logical and internal both 1280x720
+./benchmark-pyra.sh vsync0
+./benchmark-pyra.sh vsync1
+./benchmark-pyra.sh flush
+./benchmark-pyra.sh finish     # diagnostic only; do not use to play
+python3 compare-perf9.py --csv perf9.csv pyra-perf9-*.log
+
+For a meaningful FPS comparison, select logical 1280x720 in Descent 3,
+then use the same stationary 3D level/camera/graphics settings on each run.
+Unlike changing game settings, PYRA_3D_1024 does not change logical viewport
+coordinates, HUD placement, or gameplay aspect ratio. Neither a higher FPS
+nor unchanged gameplay is guaranteed until tested on the real Pyra hardware.
+
+Host-only validation of the independent viewport/scissor scaling helper:
+c++ -std=c++17 -O2 -Wall -Wextra -pedantic \
+    -o /tmp/pyra-render-scale-test tests/pyra-render-scale-test.cpp
+/tmp/pyra-render-scale-test
